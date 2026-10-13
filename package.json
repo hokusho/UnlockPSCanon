@@ -1,0 +1,19 @@
+{
+  "name": "unlock-canon-ps",
+  "version": "1.0.0",
+  "description": "Unlock Canon Picture Style profiles (.pf3 and .pf2) locked with 'Disable subsequent editing' while preserving curves and 3D LUT tables.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "canon",
+    "picture-style",
+    "pf3",
+    "pf2",
+    "picture-style-editor",
+    "unlocker"
+  ],
+  "author": "hokusho",
+  "license": "MIT"
+}

@@ -1,0 +1,9 @@
+{
+  "liveServer.settings.ignoreFiles": [
+    "**/temp/**",
+    "**/*.pf3",
+    "**/*.pf2",
+    "**/*.log",
+    "**/*.tmp"
+  ]
+}
