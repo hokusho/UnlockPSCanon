@@ -1,0 +1,233 @@
+====================================================================================================
+DOCUMENTAÇÃO TÉCNICA DEFINITIVA - DESBLOQUEIO DE PERFIS CANON PICTURE STYLE (.PF3 E .PF2)
+Histórico Literal de Pedidos, Engenharia Reversa, Solução Funcional e Arquitetura do Sistema
+====================================================================================================
+Data de Compilação: 13/10/2026
+Autor do Projeto: hokusho (https://github.com/hokusho)
+Repositório Git: Unlock Canon PS (https://github.com/hokusho/Unlock-Canon-PS.git)
+Ambiente Operacional: Windows 10/11 x64, Node.js v16+, Canon Picture Style Editor (PSEditor)
+
+----------------------------------------------------------------------------------------------------
+1. HISTÓRICO CRONOLÓGICO LITERAL DOS PEDIDOS DO USUÁRIO
+----------------------------------------------------------------------------------------------------
+Ao longo das sessões de trabalho, o usuário expressou as seguintes instruções literais:
+
+Pedido 1: "faça."
+- Objetivo: Criar a ferramenta de desbloqueio de perfis Canon Picture Style que possuem a proteção "Disable subsequent editing".
+
+Pedido 2: "cade o site? pra desbloquear?"
+- Objetivo: Disponibilizar uma interface web interativa local para o usuário enviar e baixar o arquivo.
+
+Pedido 3: "não funcionou. desbloqueia o arquivo, ele abre mas não le as informações."
+- Causa identificada: A tentativa inicial de alterar bytes diretamente no arquivo (bit manipulation) corrompia o bloco criptografado da Canon. O Picture Style Editor até abria o arquivo, mas com todas as curvas zeradas, controles bloqueados e sem dados de cor.
+
+Pedido 4: "eu quero que funcione local primeiro. depois vemos pra subir pro vercel. o html chama um app.js que nem existe..."
+- Causa: Criação e sincronização da aplicação local completa (HTML, CSS, JS e servidor Node.js).
+
+Pedido 5: "aqui está abrindo outra coisa. (http://localhost:3000/)"
+- Causa: A porta 3000 estava ocupada por outro processo do sistema (rastreio). A porta foi alterada definitivamente para 5050.
+
+Pedido 6: "o desbloqueio não funciona ele gera outro pf mas não funciona no PSE."
+- Aprofundamento da engenharia reversa para descobrir como a Canon realmente protege e assina o arquivo.
+
+Pedido 7: "eu testei o arquivo gerado, funcionou. mas o site não está funcionando."
+- Marco crítico: O motor C# / PowerShell via bibliotecas da Canon gerou o primeiro arquivo 100% funcional no PSE oficial. Porém, a interface web ainda precisava de ajustes.
+
+Pedido 8: "carrego o arquivo, mas ele não sai desta pagina."
+Pedido 9: "continua na mesma pagina. sobe o arquivo, mas a pagina fica travada do mesmo jeito, nada aparece. eu quero que o arquivo suba. que eu click pra converter e depois pra fazer o download. ta tudo automatico tá me dando agonia, eu não vejo nada do que ta sendo feito, não"
+- Causa da trava / UX: O usuário exigiu um fluxo com controle manual em 4 etapas claras:
+  Etapa 1: Selecionar o arquivo.
+  Etapa 2: Ver as informações (nome, tamanho, formato, badge de trava) com o botão "Desbloquear Perfil Agora".
+  Etapa 3: Clicar para converter e ver o progresso passo a passo.
+  Etapa 4: Ver a tela de sucesso com o botão verde "Baixar Arquivo Desbloqueado".
+
+Pedido 10: "quando eu clicko em desbloquear simplesmente reseta a pagina e eu não consigo converter e baixar o arquivo."
+- Causa identificada e solucionada: O Live Server do VS Code (porta 5500) monitorava a pasta do projeto. O servidor gravava arquivos temporários na pasta "temp" do projeto. O Live Server detectava a criação do arquivo e dava REFRESH automático na página do usuário na hora do clique!
+- Solução: Mudança dos arquivos temporários para `%TEMP%\canon_unlocker` (fora do VS Code) e inclusão de regras no `.vscode/settings.json`.
+
+Pedido 11: "vamos mudar agora a cara do site... remova esses cards de baixo. coloque uma versão em português e em inglês. As cores, não use degrade. cores solidas. nada de neon, nada de icones coloridos. nada de emojis."
+- Removidos cards informativos inferiores.
+- Adicionado sistema bilíngue completo (PT / EN).
+- Removidos todos os gradientes, neon e sombras coloridas.
+- Removidos todos os emojis e substituídos por SVGs monocromáticos limpos.
+
+Pedido 12: "remova isso. coloque as cores parecidas preto(base, fundo) branco e vemelho escuro (detalhes) ."
+- Removido o badge do topo ("Canon Profile Tool • Motor Oficial") e o rodapé.
+- Paleta refinada: Fundo preto puro (#000000), cartão preto profundo (#0A0A0A com borda #1E1E1E), textos em branco puro (#FFFFFF), detalhes em vermelho escuro (#8B0000).
+
+Pedido 13: "vamos conversar. não execute. Eu já consigo subir isso no vercel por exemplo? ele vai rodar online sem problemas?"
+- Análise de infraestrutura e esclarecimento sobre as limitações do ambiente Linux Serverless da Vercel.
+
+Pedido 14: "vamos subir isso pro meu git hub? https://github.com/hokusho nome do projeto: Unlock Canon PS"
+- Inicialização do repositório Git local, criação de .gitignore, package.json, README.md, branch main e commit inicial apontando para `https://github.com/hokusho/Unlock-Canon-PS.git`.
+
+----------------------------------------------------------------------------------------------------
+2. ENGENHARIA REVERSA DO ARQUIVO CANON (.PF3 E .PF2)
+----------------------------------------------------------------------------------------------------
+
+2.1. O QUE SÃO OS ARQUIVOS .PF3 E .PF2?
+- .PF3: Canon Picture Style File versão 3 (usado em câmeras EOS modernas, EOS R, DSLRs recentes e EOS Cinema).
+- .PF2: Canon Picture Style File versão 2 (usado em câmeras Canon legadas, EOS 5D Mk II, 7D, etc.).
+- Ambos os formatos contêm:
+  * Curvas de Tom (Luminância e canais RGB independentes).
+  * Matriz de ajuste de 6 eixos de cores (Sat, Hue para R, Y, G, C, B, M).
+  * Tabelas de Cores Específicas e 3D LUT (Look-Up Table) de até dezenas de milhares de pontos.
+  * Metadados: Nome/Caption, Copyright, e o flag de bloqueio "Disable subsequent editing".
+
+2.2. O QUE ACONTECE QUANDO A CANON BLOQUEIA O ARQUIVO?
+- No Picture Style Editor oficial, ao salvar um perfil, existe a opção:
+  [X] "Disable subsequent editing"
+- Quando essa opção é marcada:
+  * A Canon seta o parâmetro interno `fFinalize = 1`.
+  * Na estrutura interna do arquivo, o campo `DisableEdit` passa de `0` para `1`.
+  * Quando qualquer pessoa tenta abrir esse perfil no Picture Style Editor oficial, o programa exibe a mensagem de trava, desativa todas as abas de curvas, saturação, blocos 3D e impede qualquer visualização ou edição das matrizes de cores.
+
+2.3. POR QUE A EDIÇÃO DIRETA DE BYTES (BIT MANIPULATION) FALHOU?
+- Tentativa preliminar: Alterar os bytes do cabeçalho de `0x01` para `0x00` nos offsets conhecidos onde fica o flag `DisableEdit`.
+- Resultado do teste: O Picture Style Editor abre o arquivo, mas:
+  * Todas as curvas aparecem como linhas retas padrão (zeradas).
+  * Nenhum slider de cor carrega valor.
+  * O arquivo fica descaracterizado.
+- Motivo técnico profundo descoberto:
+  1. A Canon protege os blocos de dados entre os offsets `0x6E` e `0xCB` (e seções de WkData) usando criptografia em blocos de 16 bytes (AES/Blowfish proprietário do módulo `EdsCFParse`).
+  2. O arquivo possui múltiplos hashes de integridade e checksums calculados sobre o bloco cifrado.
+  3. Mudar 1 único bit no arquivo sem recalcular a cifra quebra a chave do WkData (gerando erro `0x40001008` nas DLLs). A biblioteca então descarta os dados corrompidos e preenche o perfil com zeros.
+
+----------------------------------------------------------------------------------------------------
+3. A SOLUÇÃO DEFINITIVA: MOTOR NATIVO HEADLESS DA CANON
+----------------------------------------------------------------------------------------------------
+
+3.1. A DESCOBERTA DAS DLLS DO CANON PICTURE STYLE EDITOR:
+Ao analisar a instalação oficial do Picture Style Editor da Canon (`PSEditor.exe`), descobrimos que ele é um aplicativo híbrido .NET / C++ que carrega as seguintes bibliotecas:
+- `PSEditor.exe` (Assembly principal .NET)
+- `PSE.EDSDK` (Wrapper do Canon SDK)
+- `PSE.EdsCFParse` (Motor de parsing e criptografia de curvas e estilos)
+- `DPP4Lib/` (Pasta de bibliotecas nativas C++ da Canon Digital Photo Professional 4)
+
+3.2. A CLASSE RESPONSÁVEL NO .NET:
+Dentro do `PSEditor.exe`, localizamos a classe interna:
+  `PSE.PF2FileParser`
+
+Essa classe possui exatamente os métodos que o próprio software usa para ler e salvar perfis:
+- `OpenPSFile(string path)`: Abre, valida, descriptografa e carrega 100% dos dados para a memória na estrutura interna `imageDataModel`. Retorna `0` em caso de sucesso.
+- `SavePS3File(string caption, string copyright, string outputPath, int fFinalize)`: Salva um arquivo .pf3.
+- `SavePS2File(string caption, string copyright, string outputPath, int fFinalize)`: Salva um arquivo .pf2.
+
+3.3. O SEGREDO DO PARÂMETRO `fFinalize`:
+- `fFinalize = 1`: Salva com trava de edição ("Disable subsequent editing").
+- `fFinalize = 0`: SALVA TOTALMENTE DESBLOQUEADO!
+
+3.4. COMO O DESBLOQUEIO É FEITO (EXECUÇÃO HEADLESS):
+Criamos o script PowerShell [unlocker_engine.ps1] que compila em tempo de execução um bloco em C# (`ProfileUnlockerCore`) via Reflection. O processo ocorre sem interface gráfica em milissegundos:
+1. Localiza a pasta da instalação do Picture Style Editor:
+   - `C:\Users\HOKUSHO\Documents\PSEditor_Unlocked`
+   - `%USERPROFILE%\Documents\PSEditor_Unlocked`
+   - `C:\Program Files\Canon\Picture Style Editor`
+   - `C:\Program Files (x86)\Canon\Picture Style Editor`
+2. Adiciona os caminhos ao `PATH` do processo para que o Windows resolva as DLLs nativas da Canon (`DPP4Lib`).
+3. Inicializa o SDK da Canon via Reflection:
+   - `PSE.EDSDK.EdsInitializeSDK()`
+   - `PSE.EdsCFParse.EdsCfpInitialize()`
+4. Instancia a classe `PSE.PF2FileParser`.
+5. Executa `OpenPSFile(InputPath)`:
+   - O motor oficial da Canon lê o arquivo travado original, descriptografa os blocos de 16 bytes e preenche a estrutura interna `imageDataModel` com todas as curvas RGB, ajustes de 6 cores e o LUT 3D original intactos.
+6. Extrai o `Caption` (nome do estilo) e o `Copyright` de `imageDataModel`.
+7. Executa `SavePS3File(caption, copyright, OutputPath, 0)` ou `SavePS2File`:
+   - Como passamos `0` no parâmetro `fFinalize`, o motor oficial da Canon grava o perfil com `DisableEdit = 0`, recalcula perfeitamente todos os blocos de cifra, gera as assinaturas digitais válidas e salva o arquivo de saída.
+8. Retorna "SUCCESS".
+
+3.5. PROVA DE SUCESSO:
+- Testado em múltiplos perfis comerciais travados (ex: `Thomas Fransson CrowdakV3 (1).pf3`, `01 lock.pf3`, `02 lock.pf3`).
+- Ao abrir o perfil desbloqueado gerado no Picture Style Editor oficial da Canon:
+  * NENHUM alerta de bloqueio é exibido.
+  * Todas as curvas de tom (Luminância, Vermelho, Verde, Azul) estão visíveis e 100% editáveis com todos os pontos de controle.
+  * Os 6 eixos de cores e tabelas 3D LUT funcionam com total fidelidade ao original.
+
+----------------------------------------------------------------------------------------------------
+4. ARQUITETURA DA APLICAÇÃO LOCAL
+----------------------------------------------------------------------------------------------------
+
+O projeto é composto por 5 arquivos principais integrados:
+
+1. `server.js` (Backend Node.js - Porta 5050):
+   - Servidor HTTP nativo (sem frameworks pesados).
+   - Rota POST `/api/unlock`:
+     * Recebe o arquivo via upload `multipart/form-data`.
+     * Grava o arquivo de entrada temporariamente em `%TEMP%\canon_unlocker\in_<timestamp>.<ext>`.
+       (IMPORTANTE: Nunca gravar na pasta do workspace para não disparar recarregamentos acidentais do Live Server).
+     * Chama o `unlocker_engine.ps1` via `child_process.execSync`.
+     * Lê o arquivo gerado em `%TEMP%\canon_unlocker\out_<timestamp>.<ext>`.
+     * Envia o buffer desbloqueado de volta para o cliente como `application/octet-stream`.
+     * Remove os arquivos temporários no bloco `finally`.
+   - Rota GET `/*`:
+     * Serve os arquivos estáticos (`index.html`, `style.css`, `app.js`) com cabeçalhos `Cache-Control: no-store`.
+
+2. `unlocker_engine.ps1` (Motor de Desbloqueio):
+   - Conforme detalhado na seção 3, orquestra as chamadas ao C# / Reflection nas bibliotecas oficiais da Canon.
+
+3. `index.html` (Interface do Usuário):
+   - Visual limpo, profissional, sem distrações.
+   - Máquina de estados em 5 contêineres:
+     #dropzone -> #readyToConvertState -> #processingState -> #resultState -> #errorState.
+   - Alternador de idiomas no topo direito (PT | EN).
+   - Todos os botões possuem `type="button"`.
+   - Zero emojis (somente SVGs monocromáticos).
+
+4. `style.css` (Design System):
+   - Cores estritamente sólidas (zero degradê, zero neon, zero brilhos reflexivos):
+     * Fundo geral: `#000000` (Preto puro)
+     * Cartão principal: `#0A0A0A` com borda `#1E1E1E`
+     * Superfícies secundárias: `#121212` / `#161616`
+     * Textos principais: `#FFFFFF` (Branco)
+     * Textos secundários: `#B5B5B5` e `#707070`
+     * Acento e Detalhes: `#8B0000` (Vermelho escuro sólido)
+   - Tipografia moderna: Plus Jakarta Sans e JetBrains Mono (Google Fonts).
+
+5. `app.js` (Lógica do Frontend):
+   - Dicionário de internacionalização `TRANSLATIONS` com textos completos em Português e Inglês.
+   - Persistência do idioma selecionado no `localStorage`.
+   - Manipulação de eventos com `e.preventDefault()` e `e.stopPropagation()`.
+   - Comunicação com a API `/api/unlock` e geração de download via `Blob` e `URL.createObjectURL`.
+
+6. `.vscode/settings.json`:
+   - Configura o Live Server do VS Code para ignorar extensões `.pf3`, `.pf2`, `.tmp`, `.log` e pastas `temp/`.
+
+7. `Abrir-Site-Desbloqueador.bat`:
+   - Script de 1 clique para iniciar o Node.js na porta 5050 e abrir o navegador em `http://localhost:5050`.
+
+----------------------------------------------------------------------------------------------------
+5. LIMITAÇÃO DE HOSPEDAGEM ONLINE (VERCEL VS. VPS WINDOWS)
+----------------------------------------------------------------------------------------------------
+
+PERGUNTA DO USUÁRIO: "Se eu subir isso na Vercel, vai rodar 100% pelo site?"
+RESPOSTA TÉCNICA DEFINITIVA: NÃO.
+
+MOTIVOS:
+1. A Vercel executa Serverless Functions em containers **Linux (Amazon Linux / Debian)**.
+2. O motor de desbloqueio que funciona (`PSEditor.exe`, `EdsCFParse.dll`, `DPP4Lib`) é código compilado em C++/.NET para **Windows**.
+3. O Linux da Vercel não possui PowerShell do Windows nem capacidade de rodar DLLs da Canon nativamente sem um emulador completo (Wine), o qual ultrapassa os limites de 50MB da Vercel e não possui suporte oficial.
+4. Se subir na Vercel: o site abre, mas ao clicar em "Desbloquear", retorna Erro 500.
+
+SOLUÇÕES REAIS PARA DISPONIBILIZAR NA INTERNET:
+- Opção A (Recomendada): Hospedar em uma VPS com Windows Server (Hetzner, AWS Lightsail, Contabo ~$10/mês). Roda exatamente a mesma stack Node.js + script PowerShell + Canon PSE.
+- Opção B (Custo Zero): Hospedar apenas o frontend na Vercel e apontar as requisições para a máquina local do usuário via Cloudflare Tunnel gratuito.
+- Opção C (Longo Prazo): Engenharia reversa completa da cifra de 16 bytes do `EdsCFParse` para reescrever o algoritmo em JavaScript puro / WebAssembly (executável 100% no navegador sem nenhum servidor).
+
+----------------------------------------------------------------------------------------------------
+6. INSTRUÇÕES PARA A PRÓXIMA IA / DESENVOLVEDOR QUE ASSUMIR O PROJETO
+----------------------------------------------------------------------------------------------------
+
+1. NÃO TENTE ALTERAR BYTES DIRETAMENTE NO ARQUIVO .PF3:
+   - A edição hexadecimal de flags sem recalcular os blocos criptografados invalida a assinatura do WkData. O Canon PSE descartará os dados da curva.
+   - Sempre utilize o motor headless [unlocker_engine.ps1] que reaproveita o exportador oficial da Canon com `fFinalize = 0`.
+
+2. CUIDADO COM ARQUIVOS TEMPORÁRIOS:
+   - Nunca configure o `server.js` para salvar arquivos temporários na mesma pasta do projeto, pois qualquer ferramenta de live-reload (como Live Server do VS Code) forçará o navegador do usuário a recarregar no momento exato do upload. Use sempre `os.tmpdir()`.
+
+3. PRESERVAÇÃO DE ESTILO:
+   - O usuário prefere estética minimalista: Fundo preto, textos brancos, detalhes em vermelho escuro (#8B0000), cores sólidas, sem degradê, sem neon, sem ícones coloridos e sem emojis.
+   - Manter sempre o suporte bilíngue (Português e Inglês) via `app.js`.
+
+====================================================================================================
+FIM DO DOCUMENTO TÉCNICO
+====================================================================================================
